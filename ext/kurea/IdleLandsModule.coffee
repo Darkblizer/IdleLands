@@ -5,6 +5,8 @@ Q = require "q"
 finder = require "fs-finder"
 watch = require "node-watch"
 
+c = require "irc-colors"
+
 idlePath = __dirname + "/../../src"
 
 module.exports = (Module) ->
@@ -22,7 +24,49 @@ module.exports = (Module) ->
     userIdentsList: []
     userIdents: {}
 
-    topic: "Welcome to Idletopia! /msg IdleMaster !idle-register <your character name> | New player? Join ##idlebot | Got feedback? Send it to http://idle_lands.reddit.com. | Check your stats: http://kurea.link/idle | GitHub: https://github.com/seiyria/IdleLands"
+    topic: "Welcome to Idletopia! New player? Join ##idlebot & read https://github.com/seiyria/IdleLands/wiki/New-Player-Guide | Got feedback? Send it to https://github.com/seiyria/IdleLands | Check your stats: http://kurea.link/idle"
+
+    colorMap:
+      "player.name":                c.bold
+      "event.partyName":            c.underline
+      "event.partyMembers":         c.bold
+      "event.player":               c.bold
+      "event.damage":               c.red
+      "event.gold":                 c.olive
+      "event.realGold":             c.olive
+      "event.xp":                   c.green
+      "event.realXp":               c.green
+      "event.percentXp":            c.green
+      "event.item.newbie":          c.brown
+      "event.item.Normal":          c.gray
+      "event.item.basic":           c.gray
+      "event.item.pro":             c.purple
+      "event.item.idle":            c.rainbow
+      "event.item.godly":           c.white.bgblack
+      "event.finditem.scoreboost":  c.bold
+      "event.finditem.perceived":   c.bold
+      "event.finditem.real":        c.bold
+      "event.blessItem.stat":       c.bold
+      "event.blessItem.value":      c.bold
+      "event.flip.stat":            c.bold
+      "event.flip.value":           c.bold
+      "event.enchant.boost":        c.bold
+      "event.enchant.stat":         c.bold
+      "event.transfer.destination": c.bold
+      "event.transfer.from":        c.bold
+      "player.class":               c.italic
+      "player.level":               c.bold
+      "stats.hp":                   c.red
+      "stats.mp":                   c.blue
+      "stats.sp":                   c.olive
+      "damage.hp":                  c.red
+      "damage.mp":                  c.blue
+      "spell.turns":                c.bold
+      "spell.spellName":            c.underline
+      "event.casterName":           c.bold
+      "event.spellName":            c.underline
+      "event.targetName":           c.bold
+      "event.achievement":          c.underlines
 
     loadIdle: (stopIfLoaded) ->
       @buildUserList()
@@ -30,6 +74,7 @@ module.exports = (Module) ->
         @idleLoaded = true
         @IdleWrapper.load()
         @IdleWrapper.api.register.broadcastHandler @sendMessageToAll, @
+        @IdleWrapper.api.register.colorMap @colorMap
         @IdleWrapper.api.register.playerLoadHandler @getAllUsers
 
     addServerChannel: (bot, server, channel) =>
@@ -56,15 +101,7 @@ module.exports = (Module) ->
         for channel in channels
           IdleModule::serverBots[server]?.say channel, message if (@hashServerChannel server, channel) in @currentlyInChannels
 
-    sendMessageToAll: (messageArray) ->
-      messageArray = [messageArray] if !_.isArray messageArray
-
-      constructMessage = (messageToConstruct) ->
-        _.map messageToConstruct, (messageItem) ->
-          messageItem.message
-        .join ' '
-
-      message = constructMessage messageArray
+    sendMessageToAll: (message) ->
       @broadcast message
 
     generateIdent: (server, username) ->
@@ -107,6 +144,7 @@ module.exports = (Module) ->
           docs.each (e, doc) =>
             return if not doc
             bot = BotManager.botHash[doc.server]
+            return if not bot
             @addServerChannel bot, doc.server, doc.channel
 
     beginGameLoop: ->
@@ -155,6 +193,7 @@ module.exports = (Module) ->
       @on "join", (bot, channel, sender) =>
         if bot.config.nick is sender
           setTimeout =>
+            return if channel isnt '#idlebot'
             bot.send 'TOPIC', channel, @topic
             bot.send 'MODE', channel, '+m'
             @currentlyInChannels.push @hashServerChannel bot.config.server, channel
@@ -168,6 +207,7 @@ module.exports = (Module) ->
           @userIdents[@generateIdent bot.config.server, sender] = ident
 
       @on "part", (bot, channel, sender) =>
+        return if channel isnt '#idlebot'
         bot.userManager.getUsername {user: sender, bot: bot}, (e, username) =>
           ident = @generateIdent bot.config.server, username
           @removeUser ident
@@ -195,7 +235,7 @@ module.exports = (Module) ->
           { upsert: true }, ->
 
         @addServerChannel origin.bot, server, channel
-        @broadcast "#{origin.bot.config.server}/#{origin.channel} has joined the Idletopia network!"
+        @broadcast "#{origin.bot.config.server}/#{origin.channel} has joined the Idle Lands network!"
 
       @addRoute "idle-stop", "idle.game.stop", (origin, route) =>
         [channel, server] = [origin.channel, origin.bot.config.server]
@@ -203,13 +243,17 @@ module.exports = (Module) ->
           { channel: channel, server: server, active: false },
           { upsert: true }, ->
 
-        @broadcast "#{origin.bot.config.server}/#{origin.channel} has left the Idletopia network!"
+        @broadcast "#{origin.bot.config.server}/#{origin.channel} has left the Idle Lands network!"
         @removeServerChannel origin.bot, server, channel
 
       registerCommand = (origin, route) =>
         [bot, name] = [origin.bot, route.params.name]
 
         name = name.trim()
+        
+        if name.length < 2
+          @reply origin, "You have to make your name above 2 characters!"
+          return
 
         if name.length > 20
           @reply origin, "You have to keep your name under 20 characters!"
@@ -232,13 +276,27 @@ module.exports = (Module) ->
           , null, (status) =>
             if not status.success
               @reply origin, "You're already registered a character to that ident!"
+            else if status.message
+              @reply origin, status.message
 
       @addRoute "idle-register :name", registerCommand
       @addRoute "register :name", registerCommand
 
-      @addRoute "idle-event :player :event?", "idle.game.gm", (origin, route) =>
+      @addRoute 'idle-event ":player" :event?', "idle.game.gm", (origin, route) =>
         [player, event] = [route.params.player, route.params.event]
-        @IdleWrapper.api.game.doEvent player, event, => @reply origin, "Your event is done."
+        @IdleWrapper.api.game.doEvent player, event, (did) =>
+          @reply origin, "Your event is done." if did
+          @reply origin, "Your event failed (the player wasn't found)." if _.isUndefined did
+          @reply origin, "Your event has failed (mysterious error, check the logs, or the event was just negative)." if did is false
+
+      @addRoute 'idle-globalevent :event?', "idle.game.gm", (origin, route) =>
+        event = route.params.event
+        @IdleWrapper.api.game.doGlobalEvent event, (did) =>
+          @reply origin, "Your event is done." if did
+          @reply origin, "Your event failed (something weird went wrong)." if not did
+
+      @addRoute 'idle-update', 'idle.game.gm', (origin) =>
+        @IdleWrapper.api.game.update()
 
       @addRoute "idle-add event yesno \":question\" \":affirm\" \":deny\"", "idle.game.gm", (origin, route) =>
         [question, affirm, deny] = [route.params.question, route.params.affirm, route.params.deny]
@@ -254,11 +312,19 @@ module.exports = (Module) ->
 
         @IdleWrapper.api.add.static eventType, question
 
-      @addRoute "idle-teleportloc :playerName :location", "idle.game.gm", (origin, route) =>
+      @addRoute "idle-ban :playerName", "idle.game.gm", (origin, route) =>
+        [name] = [route.params.playerName]
+        @IdleWrapper.api.game.banPlayer name
+
+      @addRoute "idle-unban :playerName", "idle.game.gm", (origin, route) =>
+        [name] = [route.params.playerName]
+        @IdleWrapper.api.game.unbanPlayer name
+
+      @addRoute 'idle-teleportloc ":playerName" :location', "idle.game.gm", (origin, route) =>
         [name, location] = [route.params.playerName, route.params.location]
         @IdleWrapper.api.game.teleport.singleLocation name, location
 
-      @addRoute "idle-teleport :playerName :map :x,:y", "idle.game.gm", (origin, route) =>
+      @addRoute 'idle-teleport ":playerName" ":map" :x,:y', "idle.game.gm", (origin, route) =>
         [name, map, x, y] = [route.params.playerName, route.params.map, route.params.x, route.params.y]
         x = parseInt x
         y = parseInt y
@@ -268,7 +334,7 @@ module.exports = (Module) ->
         [location] = [route.params.location]
         @IdleWrapper.api.game.teleport.massLocation location
 
-      @addRoute "idle-massteleport :map :x,:y", "idle.game.gm", (origin, route) =>
+      @addRoute 'idle-massteleport ":map" :x,:y', "idle.game.gm", (origin, route) =>
         [map, x, y] = [route.params.map, route.params.x, route.params.y]
         x = parseInt x
         y = parseInt y
@@ -309,6 +375,18 @@ module.exports = (Module) ->
             @reply origin, "Could not #{action} the personality \"#{personality}\""
           else
             @reply origin, "Successfully updated your personality settings."
+
+      @addRoute "idle-string :action(remove|add) :type :string?", (origin, route) =>
+        [bot, action, sType, string] = [origin.bot, route.params.action, route.params.type, route.params.string]
+        bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to change your string settings!"
+            return
+
+          identifier = @generateIdent origin.bot.config.server, username
+
+          @IdleWrapper.api[action].string identifier, sType, string
+          @reply origin, "Successfully updated your string settings."
 
       @addRoute "idle-add all-data", "idle.game.owner", (origin, route) =>
         @reply origin, "Re-initializing all modifier/event/etc data from disk."

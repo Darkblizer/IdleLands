@@ -4,6 +4,7 @@ chance = new Chance()
 _ = require "underscore"
 _.str = require "underscore.string"
 
+Datastore = require "./DatabaseWrapper"
 MessageCreator = require "./MessageCreator"
 Constants = require "./Constants"
 
@@ -12,10 +13,13 @@ Party = require "../event/Party"
 class EventHandler
 
   constructor: (@game) ->
+    @playerEventsDb = new Datastore "playerEvents", (db) -> db.ensureIndex {createdAt: 1}, {expiresAfterSeconds: 7200}, ->
 
-  doEventForPlayer: (playerName, callback, eventType = Constants.pickRandomEventType()) ->
+  doEventForPlayer: (playerName, callback, eventType = Constants.pickRandomNormalEventType()) ->
     player = @game.playerManager.getPlayerByName playerName
-    return if not player
+    if not player
+      console.error "Attempting to do event #{eventType} for #{playerName}, but player was not there."
+      return callback?()
 
     @doEvent eventType, player, callback
 
@@ -37,53 +41,83 @@ class EventHandler
           @doFindItem event, player, callback
         when 'party'
           @doParty event, player, callback
-        when 'battle'
-          @doBattle event, player, callback
         when 'enchant'
           @doEnchant event, player, callback
         when 'flipStat'
           @doFlipStat event, player, callback
+        when 'battle'
+          @doMonsterBattle event, player, callback
 
       player.recalculateStats()
 
+  broadcastEvent: (message, player, extra) ->
+    message = MessageCreator.doStringReplace message, player, extra
+    @game.broadcast MessageCreator.genericMessage message
+
+    @addEventToDb message, player
+
+  addEventToDb: (message, player) ->
+    @playerEventsDb.insert
+      createdAt: new Date()
+      player: player.name
+      message: MessageCreator._replaceMessageColors message
+    , ->
+
   doYesNo: (event, player, callback) ->
-    player.emit "yesno"
+    #player.emit "yesno"
     if chance.bool {likelihood: player.calculateYesPercent()}
-      (@game.broadcast MessageCreator.genericMessage MessageCreator.doStringReplace event.y, player) if event.y
+      (@broadcastEvent event.y, player) if event.y
       callback true
     else
-      (@game.broadcast MessageCreator.genericMessage MessageCreator.doStringReplace event.n, player) if event.n
+      (@broadcastEvent event.n, player) if event.n
       callback false
 
   doXp: (event, player, callback) ->
     if not event.remark
       console.error "XP EVENT FAILURE", event
-      return
+      return callback false
+
     boost = 0
+    percent = 0
 
     if (chance.bool {likelihood: player.calculateYesPercent()})
-      boost = Constants.eventEffects[event.type].amount
+      percent = Constants.eventEffects[event.type].fail
+      boost = Math.floor player.xp.maximum * (percent/100)
     else
-      boost = Math.floor player.xp.maximum / Constants.eventEffects[event.type].percent
+      min = Constants.eventEffects[event.type].minPercent
+      max = Constants.eventEffects[event.type].maxPercent
+      flux = Constants.eventEffects[event.type].flux
+      step = player.level.maximum / (max - min)
+      steps = Math.floor ((player.level.maximum - player.level.getValue()) / step)
+
+      fluxed = chance.floating {min: -flux, max: flux, fixed: 3}
+
+      percent = min + steps + fluxed
+
+      boost = Math.floor player.xp.maximum * (percent/100)
+
+    boost = player.calcXpGain boost
 
     extra =
       xp: Math.abs boost
-      xpr: boost
-      xpp: +((boost/player.xp.maximum)*100).toFixed 3
+      realXp: boost
+      percentXp: +(percent).toFixed 3
+
+    message = "#{event.remark} [%realXpxp, ~%percentXp%]"
+
+    @broadcastEvent message, player, extra
 
     player.gainXp boost
 
-    player.emit "event.#{event.type}", extra
+    player.emit "event.#{event.type}", player, extra
 
-    message = event.remark + " [%xprxp, ~%xpp%]"
-
-    @game.broadcast MessageCreator.genericMessage MessageCreator.doStringReplace message, player, extra
-    callback()
+    callback true
 
   doGold: (event, player, callback) ->
     if not event.remark
       console.error "GOLD EVENT FAILURE", event
-      return
+      return callback false
+
     goldTiers = Constants.eventEffects[event.type].amount
     curGold = player.gold.getValue()
 
@@ -98,25 +132,39 @@ class EventHandler
         boost = chance.integer {min: min, max: max}
         break
 
-    return if not boost
+    if not boost
+      val = _.last goldTiers
+      min = Math.min val, 0
+      max = Math.max val, 1
+      boost = chance.integer min: min, max: max
+
+    if _.isNaN boost
+      console.error "BOOST PRE-CALC IS NaN"
+      boost = 1
+
+    boost = player.calcGoldGain boost
+
+    if _.isNaN boost
+      console.error "BOOST POST-CALC IS NaN"
+      boost = 1
 
     extra =
       gold: Math.abs boost
-      goldr: boost
+      realGold: boost
 
     player.gainGold boost
 
-    player.emit "event.#{event.type}", extra
+    player.emit "event.#{event.type}", player, extra
 
-    message = event.remark + " [%goldr gold]"
+    message = event.remark + " [%realGold gold]"
 
-    @game.broadcast MessageCreator.genericMessage MessageCreator.doStringReplace message, player, extra
-    callback()
+    @broadcastEvent message, player, extra
+    callback true
 
   doItem: (event, player, callback) ->
     item = (_.sample player.equipment)
-    stat = (_.sample (_.reject (_.keys item), (key) -> key in ["name", "type", "itemClass", "enchantLevel"] or item[key] is 0))
-    return if not stat
+    stat = @pickBlessStat item
+    return callback false if not stat
 
     val = item[stat] ? 0
 
@@ -128,118 +176,165 @@ class EventHandler
       boost = Math.floor Math.abs(val) / Constants.eventEffects[event.type].percent
 
     extra =
-      item: item.getName()
+      item: "<event.item.#{item.itemClass}>#{item.getName()}</event.item.#{item.itemClass}>"
 
     start = val
     end = val+boost
 
-    return if start is end
+    return callback false if start is end
 
     item[stat] = end
 
     string = MessageCreator.doStringReplace event.remark, player, extra
-    string += " [#{stat} #{start} -> #{end}]"
+    string += " [<event.blessItem.stat>#{stat}</event.blessItem.stat> <event.blessItem.value>#{start} -> #{end}</event.blessItem.value>]"
 
-    player.emit "event.#{event.type}", item, boost
+    player.emit "event.#{event.type}", player, item, boost
 
-    @game.broadcast MessageCreator.genericMessage string
-    callback()
+    @broadcastEvent string, player
+    callback true
 
   doFindItem: (event, player, callback) ->
     item = @game.equipmentGenerator.generateItem()
     myItem = _.findWhere player.equipment, {type: item.type}
-    return if not myItem
+    return callback false if not myItem
     score = player.calc.itemScore item
     myScore = player.calc.itemScore myItem
     realScore = item.score()
     myRealScore = myItem.score()
 
-    if score >= myScore and realScore < player.itemFindRange()
-      player.equipment = _.without player.equipment, myItem
-      player.equipment.push item
+    if score > myScore and realScore < player.calc.itemFindRange() and (chance.bool likelihood: player.calc.itemReplaceChancePercent())
+      player.equip item
 
       extra =
-        item: item.getName()
+        item: "<event.item.#{item.itemClass}>#{item.getName()}</event.item.#{item.itemClass}>"
 
-      totalString = "#{event.remark} [perceived: #{myScore} -> #{score} | real: #{myRealScore} -> #{realScore} | +#{score-myScore}]"
-      player.emit "event.findItem", item
+      realScoreDiff = realScore-myRealScore
+      normalizedRealScore = if realScoreDiff > 0 then "+#{realScoreDiff}" else realScoreDiff
 
-      @game.broadcast MessageCreator.genericMessage MessageCreator.doStringReplace totalString, player, extra
+      totalString = "#{event.remark} [perceived: <event.finditem.perceived>#{myScore} -> #{score} (+#{score-myScore})</event.finditem.perceived> | real: <event.finditem.real>#{myRealScore} -> #{realScore} (#{normalizedRealScore})</event.finditem.real>]"
+      player.emit "event.findItem", player, item
+
+      @broadcastEvent totalString, player, extra
 
     else
       multiplier = player.calc.itemSellMultiplier item
       value = Math.floor item.score() * multiplier
-      player.gold.add value
-      player.emit "event.sellItem", item, value
+      player.gainGold value
+      player.emit "event.sellItem", player, item, value
 
-    callback()
+    callback true
 
   doParty: (event, player, callback) ->
-    return if player.party or @game.inBattle
+    return callback false if player.party or @game.inBattle
     newParty = @game.createParty player
-    return if not newParty?.name
+    return callback false if not newParty?.name
 
     newPartyPlayers = _.without newParty.players, player
 
     extra =
-      party: _.str.toSentence _.pluck newPartyPlayers, 'name'
+      partyMembers: _.str.toSentence _.pluck newPartyPlayers, 'name'
       partyName: newParty.name
 
-    @game.broadcast MessageCreator.genericMessage MessageCreator.doStringReplace event.remark, player, extra
+    @broadcastEvent event.remark, player, extra
 
-    callback()
+    callback true
 
-  doBattle: (event, player, callback) ->
+  doMonsterBattle: (event, player, callback) ->
     event.player = player
-    @game.startBattle [], event
 
-    callback()
+    new Party @game, player if not player.party
+    party = player.party
+    return if not player.party
+
+    monsterParty = @game.monsterGenerator.generateMonsterParty party.score()
+    return if monsterParty.players.length is 0
+
+    @game.startBattle [monsterParty, player.party], event
+    player.emit "event.monsterbattle", player
+
+    callback true
 
   doEnchant: (event, player, callback) ->
     item = _.sample _.reject player.equipment, (item) -> item.enchantLevel >= Constants.defaults.game.maxEnchantLevel
 
-    return if not item
-    stat = (_.sample (_.reject (_.keys item), (key) -> key in ["name", "type", "itemClass", "enchantLevel"] or item[key] isnt 0))
+    return callback false if not item
+    stat = @pickStatNotPresentOnItem item
 
     boost = 10
 
     extra =
-      item: item.getName()
+      item: "<event.item.#{item.itemClass}>#{item.getName()}</event.item.#{item.itemClass}>"
 
     item[stat] += boost
 
     item.enchantLevel = 0 if not item.enchantLevel or _.isNaN item.enchantLevel
 
-    string = MessageCreator.doStringReplace event.remark, player, extra
-    string += " [#{stat} = #{boost} | +#{item.enchantLevel} -> +#{++item.enchantLevel}]"
+    string = "#{event.remark} [<event.enchant.stat>#{stat} = #{boost}</event.enchant.stat> | <event.enchant.boost>+#{item.enchantLevel} -> +#{++item.enchantLevel}</event.enchant.boost>]"
 
-    player.emit "event.enchant", item, item.enchantLevel
+    player.emit "event.enchant", player, item, item.enchantLevel
 
-    @game.broadcast MessageCreator.genericMessage string
-    callback()
+    @broadcastEvent string, player, extra
+    callback true
 
   doFlipStat: (event, player, callback) ->
     item = (_.sample player.equipment)
-    stat = (_.sample (_.reject (_.keys item), (key) -> key in ["name", "type", "itemClass", "enchantLevel"] or item[key] is 0))
+    stat = @pickStatPresentOnItem item
 
-    return if not stat or item[stat] is 0
+    return callback false if not stat or item[stat] is 0
 
     val = item[stat] ? 0
 
     extra =
-      item: item.getName()
+      item: "<event.item.#{item.itemClass}>#{item.getName()}</event.item.#{item.itemClass}>"
 
     start = val
     end = -val
 
     item[stat] = end
 
-    string = MessageCreator.doStringReplace event.remark, player, extra
-    string += " [#{stat} #{start} -> #{end}]"
+    string = "#{event.remark} [<event.flip.stat>#{stat}</event.flip.stat> <event.flip.value>#{start} -> #{end}</event.flip.value>]"
 
-    player.emit "event.#{event.type}", item, stat
+    player.emit "event.#{event.type}", player, item, stat
 
-    @game.broadcast MessageCreator.genericMessage string
-    callback()
+    @broadcastEvent string, player, extra
+    callback true
+
+  ignoreKeys: ['_calcScore', 'enchantLevel']
+  specialStats: ['offense', 'defense', 'prone', 'power', 'silver', 'crit', 'dance', 'deadeye', 'glowing', 'vorpal']
+  t0: ['int', 'str', 'dex', 'con', 'wis', 'agi']
+  t1: ['intPercent', 'strPercent', 'conPercent', 'wisPercent', 'agiPercent']
+  t2: ['gold', 'xp', 'hp', 'mp']
+  t3: ['goldPercent', 'xpPercent', 'hpPercent', 'mpPercent', 'luck']
+  t4: ['luckPercent']
+
+  allValidStats: -> @t0.concat @t1.concat @t2.concat @t3.concat @t4
+
+  pickStatPresentOnItem: (item, base = @allValidStats()) ->
+    nonZeroStats = _.reject (_.keys item), (stat) -> item[stat] is 0 or _.isNaN item[stat]
+    statsInBoth = _.intersection base, nonZeroStats
+    _.sample statsInBoth
+
+  pickStatNotPresentOnItem: (item, base = @allValidStats()) ->
+    zeroStats = _.filter (_.keys item), (stat) -> item[stat] is 0
+    statsMissing = _.intersection base, zeroStats
+    _.sample statsMissing
+
+  pickBlessStat: (item) ->
+    chances = [1, 5, 10, 20, 100]
+    keys = [@t4, @t3, @t2, @t1, @t0]
+    validKeysToChoose = _.compact _.map keys, (keyList) =>
+      @pickStatPresentOnItem item, keyList
+
+    return '' if validKeysToChoose.length is 0
+
+    chances = chances[-validKeysToChoose.length..]
+
+    retStat = ''
+    for i in [0..validKeysToChoose.length]
+      if chance.bool {likelihood: chances[i]}
+        retStat = validKeysToChoose[i]
+        break
+
+    retStat
 
 module.exports = exports = EventHandler

@@ -5,13 +5,13 @@ class Mage extends Class
 
   baseHp: 25
   baseHpPerLevel: 5
-  baseHpPerCon: 3
+  baseHpPerCon: 4
 
   baseMp: 10
   baseMpPerLevel: 4
   baseMpPerInt: 6
 
-  baseConPerLevel: 1
+  baseConPerLevel: 2
   baseDexPerLevel: 1
   baseAgiPerLevel: 2
   baseStrPerLevel: 1
@@ -19,7 +19,10 @@ class Mage extends Class
   baseWisPerLevel: 2
 
   itemScore: (player, item) ->
-    item.int*3 + item.con - item.str - item.dex
+    item.int*1.4 +
+    item.con*0.4 -
+    item.str*0.8 -
+    item.dex*0.3
 
   physicalAttackChance: -> -25
 

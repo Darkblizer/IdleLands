@@ -1,5 +1,19 @@
+# dex
 "mittens" dex=1
-"gloves" str=3
+
+# str
+"gloves" str=3 luck=1
+
+# int / dex
+"silk gloves" int=5 dex=2
+"ove gloves" int=15 dex=5 fire=5
+"princess glove" int=30 dex=15
+"magic hand" int=80 dex=30
+"techno glove" int=150 dex=20
+"Magefist" int=300 dex=100 fire=100
+"Merlin's Mittens" int=550 dex=50
+
+# dex / str
 "bracers" dex=3 str=1
 "gauntlets" str=6 dex=3
 "armlets" dex=8 str=2
@@ -7,16 +21,25 @@
 "scalemail gloves" dex=12 str=12
 "dragonscale gloves" str=20 dex=12
 "blacksmith gloves" str=30 dex=15
-"tempered gloves" dex=60 str=20
+"big cartoon gloves" str=40 dex=20
+"ninja gloves" dex=55 str=10
+"tempered gloves" dex=60 str=20 luck=2
 "spiked knuckles" str=62 dex=62
+"mega punch" str=90 dex=40
 "crimson gloves" str=150 dex=6
 "Roll of Quarters" str=125 dex=75
-"Glover" dex=200 str=50
+"Glover" dex=200 str=50 luck=3
+"Real Steel" str=100 dex=156 luck=4
 "How-Do-You-Type-With-These Boxing Gloves" str=300
-"Real Steel" str=100 dex=156
 "Scyther" str=212 dex=123
 "Knife-Fists" str=300 dex=156
 "Pixelated Gloves" dex=350 str=100
-"My Little Painbringers" str=200 dex=311
+"My Little Painbringers" str=200 dex=311 luck=5
 "Godhand" dex=400 str=200
-"Hands of Fate" str=500 dex=500 power
+"Hands of Fate" str=500 dex=500 power=1
+
+# idle-class
+"Glowing Gauntlets of the Idling Gods" str=1500 con=1500 dex=1000
+
+# godly-class
+"Infinitely Expanding Fractal Gloves" int=-1000 con=3000 str=3000 dex=3000

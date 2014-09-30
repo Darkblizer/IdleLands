@@ -18,8 +18,16 @@ class PlayerManager
       db.ensureIndex { identifier: 1 }, { unique: true }, ->
       db.ensureIndex { name: 1 }, { unique: true }, ->
 
-  banPlayer: (identifer, callback) ->
-    @db.update {identifier: identifier}, {banned: true}, {}, callback
+      db.update {}, {$set:{isOnline: no}}, {multi: yes}, ->
+
+  randomPlayer: ->
+    _.sample @players
+
+  banPlayer: (name, callback) ->
+    @db.update {name: name}, {banned: true}, {}, callback
+
+  unbanPlayer: (name, callback) ->
+    @db.update {name: name}, {banned: false}, {}, callback
 
   retrievePlayer: (identifier, callback) ->
     @db.findOne {identifier: identifier}, (e, player) =>
@@ -33,35 +41,43 @@ class PlayerManager
       callback player
 
   addPlayer: (identifier, suppress = no) ->
-    return if _.findWhere @players, {identifier: identifier}
+    return if _.findWhere @players, {identifier: identifier} or identifier of @playerHash
     @retrievePlayer identifier, (player) =>
       return if not player
+      player.isOnline = yes
       @players.push player
       @playerHash[identifier] = player
-      @game.broadcast MessageCreator.generateMessage "#{player.name}, the level #{player.level.__current} #{player.professionName}, has joined #{Constants.gameName}!" if not suppress
+      @game.broadcast "#{player.name}, the level #{player.level.__current} #{player.professionName}, has joined #{Constants.gameName}!" if not suppress
 
       @players = _.uniq @players
 
   removePlayer: (identifier) ->
 
-    name = (_.findWhere @players, {identifier, identifier})?.name
-    return if not name
+    player = _.findWhere @players, {identifier, identifier}
+    return if not player
 
-    @players = _.filter @players, (player) -> not player.identifier is identifier
+    player.isOnline = no
+    @savePlayer player
+
+    name = player.name
+
+    @players = _.reject @players, (player) -> player.identifier is identifier
     delete @playerHash[identifier]
 
-    @game.broadcast MessageCreator.generateMessage "#{name} has left #{Constants.gameName}!"
+    @game.broadcast "#{name} has left #{Constants.gameName}!"
 
   registerPlayer: (options, middleware, callback) ->
 
     playerObject = new Player options
     playerObject.playerManager = @
     playerObject.initialize()
+    playerObject.isOnline = yes
     saveObj = @buildPlayerSaveObject playerObject
+    saveObj._events = {}
 
     @db.insert saveObj, (iErr) =>
       if iErr
-        console.error "Player creation error: #{iErr}" if callback?
+        console.error "Player creation error: #{iErr}", playerObject if callback?
         callback?(iErr)
         return
 
@@ -69,10 +85,15 @@ class PlayerManager
       @playerHash[options.identifier] = playerObject
       @players.push playerObject
 
+      @beginWatchingPlayerStatistics playerObject
+
       callback?({ success: true, name: options.name })
 
   buildPlayerSaveObject: (player) ->
-    _.omit player, 'playerManager', 'party', 'personalities', 'calc', 'spellsAffectedBy', '_events'
+    calc = player.calc.base
+    ret = _.omit player, 'playerManager', 'party', 'personalities', 'calc', 'spellsAffectedBy', 'fled', '_events', 'profession', 'stepCooldown'
+    ret._baseStats = calc
+    ret
 
   savePlayer: (player) ->
     savePlayer = @buildPlayerSaveObject player
@@ -93,7 +114,7 @@ class PlayerManager
 
     loadRN = (obj) ->
       return if not obj
-      obj.__current = 0 if _.isNaN obj.current
+      obj.__current = 0 if _.isNaN obj.__current
       obj.__proto__ = RestrictedNumber.prototype
       obj
 
@@ -108,6 +129,12 @@ class PlayerManager
       player[item] = loadRN player[item]
 
     player.__proto__ = Player.prototype
+
+    player.wildcard = yes
+    player.listenerTree = {}
+    player._events = {}
+    player.newListener = false
+    player.setMaxListeners 100
 
     player.playerManager = @
     player.isBusy = false
@@ -143,11 +170,14 @@ class PlayerManager
   getPlayerByName: (playerName) ->
     _.findWhere @players, {name: playerName}
 
+  getPlayerById: (playerId) ->
+    _.findWhere @players, {identifier: playerId}
+
   beginWatchingPlayerStatistics: (player) ->
 
     maxStat = (stat, val) ->
       val = Math.abs val
-      player.statistics[stat] = 0 if not stat of player.statistics or _.isNaN player.statistics[stat]
+      player.statistics[stat] = 1 if not (stat of player.statistics) or _.isNaN player.statistics[stat]
       player.statistics[stat] = Math.max val, player.statistics[stat]
 
     addStat = (stat, val, intermediate) ->
@@ -158,27 +188,35 @@ class PlayerManager
       root[stat] += val
 
     player.onAny ->
+      player.statistics = {} if not player.statistics
 
       switch @event
-        when "self.heal"
-          maxStat "max heal", arguments[1].damage
-          addStat "total heals", arguments[1].damage
+        when "combat.self.heal"
+          maxStat "calculated max heal given", arguments[1].damage
+          addStat "calculated total heals given", arguments[1].damage
 
-        when "self.healed"
-          addStat "heal received", arguments[1].damage
+        when "combat.self.healed"
+          addStat "calculated heal received", arguments[1].damage
 
-        when "self.damage"
-          maxStat "max damage", arguments[1].damage
-          addStat "total damage", arguments[1].damage
+        when "combat.self.damage"
+          maxStat "calculated max damage given", arguments[1].damage
+          addStat "calculated total damage given", arguments[1].damage
 
-        when "self.damaged"
-          addStat "damage received", arguments[1].damage
+        when "combat.self.damaged"
+          addStat "calculated damage received", arguments[1].damage
 
-        when "self.kill"
-          addStat arguments[0].name, 1, "kills"
+        when "combat.self.kill"
+          addStat arguments[0].name, 1, "calculated kills" if not arguments[0].isMonster
+          addStat arguments[0].professionName, 1, "calculated kills by class" if arguments[0].professionName
 
-      @event = @event.split(".").join " "
-      player.statistics[@event] = 0 if not @event of player.statistics or _.isNaN player.statistics[@event]
-      player.statistics[@event]++
+        when "player.profession.change"
+          addStat arguments[2], 1, "calculated class changes"
+
+      event = @event.split(".").join " "
+      player.statistics[event] = 1 if not event of player.statistics or _.isNaN player.statistics[event]
+      player.statistics[event]++
+      player.statistics[event] = 1 if not player.statistics[event]
+
+      player.checkAchievements()
 
 module.exports = exports = PlayerManager

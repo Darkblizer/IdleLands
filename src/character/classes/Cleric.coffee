@@ -5,7 +5,7 @@ class Cleric extends Class
 
   baseHp: 40
   baseHpPerLevel: 12
-  baseHpPerCon: 3
+  baseHpPerCon: 5
 
   baseMp: 8
   baseMpPerLevel: 3
@@ -19,7 +19,10 @@ class Cleric extends Class
   baseWisPerLevel: 5
 
   itemScore: (player, item) ->
-    item.wis*3 - item.str - item.dex - item.int
+    item.int*0.7 +
+    item.wis*1.5 -
+    item.str*0.4 -
+    item.dex*0.4 
 
   physicalAttackChance: -> -10
 

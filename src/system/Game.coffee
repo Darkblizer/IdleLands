@@ -1,11 +1,12 @@
 
-
+AchievementManager = require "./AchievementManager"
 PlayerManager = require "./PlayerManager"
 EventHandler = require "./EventHandler"
-MonsterManager = require "./MonsterManager"
+MonsterGenerator = require "./MonsterGenerator"
 MessageCreator = require "./MessageCreator"
 ComponentDatabase = require "./ComponentDatabase"
 EquipmentGenerator = require "./EquipmentGenerator"
+GlobalEventHandler = require "./GlobalEventHandler"
 SpellManager = require "./SpellManager"
 Constants = require "./Constants"
 GMCommands = require "./GMCommands"
@@ -20,22 +21,25 @@ console.log "Rebooted IdleLands."
 
 class Game
 
-  #Constants either go here, or in a Constants class
-
   constructor: () ->
     @parties = []
-    @playerManager = new PlayerManager @
-    @monsterManager = new MonsterManager()
+    @gmCommands = new GMCommands @
     @spellManager = new SpellManager @
     @eventHandler = new EventHandler @
-    @equipmentGenerator = new EquipmentGenerator @
+    @playerManager = new PlayerManager @
+    @monsterGenerator = new MonsterGenerator @
     @componentDatabase = new ComponentDatabase @
-    @gmCommands = new GMCommands @
+    @globalEventHandler = new GlobalEventHandler @
+    @equipmentGenerator = new EquipmentGenerator @
+    @achievementManager = new AchievementManager @
     @world = new World()
 
   registerBroadcastHandler: (@broadcastHandler, @broadcastContext) ->
     console.info "Registered broadcast handler."
-    @broadcast MessageCreator.generateMessage "Initializing the Lands that Idle (#{Constants.gameName})."
+    @broadcast "Initializing the Lands that Idle (#{Constants.gameName})."
+
+  registerColors: (colors) ->
+    MessageCreator.registerMessageMap colors
 
   broadcast: (message) ->
     return if not message
@@ -59,79 +63,146 @@ class Game
   startBattle: (parties = [], event = null) ->
     return if @inBattle
     return if parties.length < 2 and @playerManager.players.length < 2
+    wasPassedEnoughParties = parties.length > 1
 
-    if parties.length is 0
-      # Calculate number of teams involved
-      # TODO: Randomize number of teams
-      numberOfTeams = 2
-      return if numberOfTeams > @playerManager.players.length
+    startBattle = (parties) =>
 
-      # Calculate how many players will participate in the battle
-      # TODO: Skew chances so that smaller teams are chosen more often
-      maxParticipants = Constants.defaults.game.maxPartyMembers * numberOfTeams
-      numParticipants = chance.integer({min: numberOfTeams, max: maxParticipants})
+      if event
+        @broadcast MessageCreator.genericMessage MessageCreator.doStringReplace event.remark, event.player
 
-      # Determine pool of eligible candidates
-      soloPlayers = _.reject @playerManager.players, (player) -> player.party
-      candidates = @parties.concat soloPlayers
-      return if numberOfTeams > candidates.length
+      @inBattle = true
+      new Battle @,parties
 
-      # Choose randomly the participants for this battle
-      # TODO: Skip parties that would bring us over the decided max participants
-      participants = []
-      candidates = _.shuffle candidates
-      while candidates.length > 0 and participants.length < numParticipants
-        participants.push candidates.pop()
+    tryBattle = (parties) =>
+      return if parties.length <= 1
 
-      # Split evenly (discriminate on score) the participants into parties
-      groups = []
-      for i in [0...numberOfTeams]
-        groups[i] = []
-        groups[i].score = () -> _.reduce this, ((sum, current) -> sum += current.score()), 0
+      partyScores = _.map parties, (party) -> party.score()
 
-      # TODO: Support multiple parties
-      participants = _.sortBy participants, (c) -> c.score()
-      while participants.length > 0
-        if groups[0].score() < groups[1].score()
-          groups[0].push participants.pop()
-        else
-          groups[1].push participants.pop()
+      minScore = Math.min partyScores...
+      maxScore = Math.max partyScores...
 
-      # Merge groups
-      collapseGroup = (group) ->
-        masterParty = _.sample _.filter group, (party) -> party instanceof Party
-        if masterParty
-          otherParties = _.sample _.filter group, (party) -> party instanceof Party and party is not masterParty
-          _.each otherParties, (party) -> masterParty.recruit(party.disband())
-          masterParty
-        else
-          new Party @, group
+      playerLists = _.map parties, (party) -> _.map party.players, (player) -> player.name
+      modified = _.flatten playerLists
+      if (_.uniq modified).length < modified.length
+        console.error "ERROR: BATTLE FORMATION BLOCKED DUE TO ONE PLAYER BEING ON BOTH SIDES"
+        return no
 
-      for i in [0...numberOfTeams]
-        parties[i] = collapseGroup(groups[i])
-    else
-      potentialParties = _.sample @parties, 2
-      return if potentialParties.length < 2
-      parties = potentialParties
+      maxPercDiff = Constants.defaults.game.maxPartyScorePercentDifference
 
-    # TODO: Support multiple parties
-    party1score = parties[0].score()
-    party2score = parties[1].score()
+      if minScore < maxScore*maxPercDiff
+        if parties[0].players.length and parties[1].players.length
+          @broadcast MessageCreator.genericMessage "#{parties[0].getPartyName()} passed by #{parties[1].getPartyName()}, smiling and waving."
+        _.each parties, (party) -> party.disband()
+        return no
 
-    minScore = Math.min party1score, party2score
-    maxScore = Math.max party1score, party2score
+      return no if parties.length is 0
 
-    maxPercDiff = Constants.defaults.game.maxPartyScorePercentDifference
+      yes
 
-    if minScore < maxScore*maxPercDiff
-      @broadcast MessageCreator.genericMessage "#{parties[0].getPartyName()} passed by #{parties[1].getPartyName()}, smiling and waving."
+    group = _.sample parties, 2
+    if tryBattle group
+      startBattle group
       return
 
-    if event
-      @broadcast MessageCreator.genericMessage MessageCreator.doStringReplace event.remark, event.player
+    return if wasPassedEnoughParties
 
-    @inBattle = true
-    new Battle @,parties
+    # player ordering
+    soloPlayers = _.reject @playerManager.players, (player) -> player.party
+    soloPlayersOrdered = _.sortBy soloPlayers, (player) -> -player.calc.totalItemScore()
+
+    # constants
+    maxParties = Constants.defaults.game.maxParties
+    maxPartyMembers = Constants.defaults.game.maxPartyMembers
+    numberOfTeams = 2
+
+    # party generation variables
+    buckets = @parties or []
+    isSoloBattle = chance.bool likelihood: Constants.defaults.game.soloBattleProbability
+    numberOfTeams = chance.integer({min: 3, max: maxParties}) if chance.bool likelihood: Constants.defaults.game.aboveAveragePartyCountBattleProbability
+    maxPlayersPerTeam = if isSoloBattle then 1 else maxPartyMembers
+
+    playerArrayToScores = (players) ->
+      _.map players, (player) -> player.calc.totalItemScore()
+
+    createParties = (givenPlayers, existingParties, partyMax = 2, perPartyMax = 1) =>
+
+      updatePartySize = (party) ->
+        canPartiesTakeMoreMembers[party.name] = no if party.players.length is perPartyMax
+
+      arrayStartPos = soloPlayersOrdered.length - partyMax - 1
+      availablePlayers = givenPlayers
+      maxPartyScore = (_.max existingParties, (party) -> party.score()).score?()
+
+      if arrayStartPos > 1
+        startIndex = chance.integer min: 0, max: arrayStartPos
+
+        firstPlayers = givenPlayers[startIndex..startIndex+partyMax]
+
+        availablePlayers = _.without availablePlayers, firstPlayers...
+
+        maxPartyScore = _.reduce (playerArrayToScores firstPlayers), ((prev, score) -> prev+score), 0
+
+      partyScores = {}
+      canPartiesTakeMoreMembers = {}
+      partyNames = {}
+      partiesAvailable = []
+
+      # add a party to the roster list
+      addPartyToRoster = (party) ->
+        partyName = party.name
+        partyScores[partyName] = party.score()
+        canPartiesTakeMoreMembers[partyName] = yes
+        partyNames[partyName] = party
+        partiesAvailable.push party
+
+        updatePartySize party
+
+      destroyParty = (party) ->
+        partyName = party.name
+        delete partyScores[partyName]
+        delete partyNames[partyName]
+        delete canPartiesTakeMoreMembers[partyName]
+        party.disband()
+
+      #check if existing parties are below the max score (add to party hash if so)
+      _.each existingParties, (existingBucket) ->
+        addPartyToRoster existingBucket if existingBucket.score() <= maxPartyScore
+
+      partiesChoosePlayer = ->
+        for partyName, score of partyScores
+          continue if not canPartiesTakeMoreMembers[partyName]
+
+          choosablePlayers = _.reject availablePlayers, (player) -> player.calc.totalItemScore() > maxPartyScore-score
+
+          if choosablePlayers.length > 0
+
+            party = partyNames[partyName]
+
+            chosenPlayer = _.max choosablePlayers, (player) -> player.calc.totalItemScore()
+            availablePlayers = _.without availablePlayers, chosenPlayer
+            partyScores[partyName] += chosenPlayer.calc.totalItemScore()
+
+            party.addPlayer chosenPlayer
+
+            updatePartySize party
+          else
+            canPartiesTakeMoreMembers[partyName] = no
+
+      _.each firstPlayers, (player) =>
+        newParty = new Party @, player
+        addPartyToRoster newParty
+
+      parties = _.sample partiesAvailable, partyMax
+
+      unusedParties = _.difference partiesAvailable, parties
+
+      _.each unusedParties, destroyParty
+
+      do partiesChoosePlayer for x in [0..availablePlayers.length]
+
+    createParties soloPlayersOrdered, buckets, numberOfTeams, maxPlayersPerTeam
+
+    startBattle parties if tryBattle parties
 
   teleport: (player, map, x, y, text) ->
     player.map = map
@@ -141,5 +212,12 @@ class Game
 
   nextAction: (identifier) ->
     @playerManager.playerTakeTurn identifier
+
+  doCodeUpdate: ->
+
+    require("git-pull") "#{__dirname}/../", (e, consoleOutput) ->
+      console.error e if e
+      console.log consoleOutput
+      process.exit 0
 
 module.exports = exports = Game

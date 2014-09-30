@@ -1,73 +1,112 @@
-###
-  all items should have a calculated item rating
-  level-restricted
-  <enchantment-level 1-10> <avatar> <special-attr> <retro | color | descriptor> <noun> <animal | saint | spirit>
-
-  stats (calculated on demand):
-
-  str: damage
-  dex: to-hit
-  int: magick damage
-  wis: healing / buff duration,strength
-  con: dodging / hp
-  agi: dodging
-  sentimentality: emotional damage
-  piety: spiritual damage
-
-  hidden stat: luck
-###
+_ = require "underscore"
 
 class Equipment
 
   constructor: (options) ->
-    @name = options.name
-    @type = options.type
-    @itemClass = options.class or "basic"
-    console.error "ERROR in equipment constructor, name=#{@name}, type=#{@type}" if not @name or not @type
-
-    @str = options.str or 0
-    @dex = options.dex or 0
-    @int = options.int or 0
-    @con = options.con or 0
-    @wis = options.wis or 0
-    @agi = options.agi or 0
-
-    @strPercent = options.strPercent or 0
-    @dexPercent = options.dexPercent or 0
-    @intPercent = options.intPercent or 0
-    @conPercent = options.conPercent or 0
-    @wisPercent = options.wisPercent or 0
-    @agiPercent = options.agiPercent or 0
-
-    @luck = options.luck or 0
-    @sentimentality = options.sentimentality or 0
-    @piety = options.piety or 0
-
-    @luckPercent = options.luckPercent or 0
-    @sentimentalityPercent = options.sentimentalityPercent or 0
-    @pietyPercent = options.pietyPercent or 0
-
-    @ice = options.ice or 0
-    @fire = options.fire or 0
-    @water = options.water or 0
-    @earth = options.earth or 0
-    @thunder = options.thunder or 0
-
-    @icePercent = options.icePercent or 0
-    @firePercent = options.firePercent or 0
-    @waterPercent = options.waterPercent or 0
-    @earthPercent = options.earthPercent or 0
-    @thunderPercent = options.thunderPercent or 0
-
-    @enchantLevel = options.enchantLevel or 0
+    _.extend @, _.defaults options, Equipment.defaults
+    @_baseScore = @score()
+    @foundAt = new Date()
+    #console.error "ERROR in equipment constructor, name=#{@name}, type=#{@type}" if not @name or not @type
 
   score: ->
-    @str + @dex + @con + @int + @wis + @agi +
-    (@luck*3) +
-    @ice + @fire + @water + @earth + @thunder +
-    @icePercent*10 + @firePercent*10 + @waterPercent*10 + @earthPercent*10 + @thunderPercent*10
+    ret = 0
+    for attr, mult of Equipment.multipliers
+      ret += @[attr]*mult if attr of @
+    @_calcScore = ret
+    parseInt ret
 
   getName: ->
     if @enchantLevel then "+#{@enchantLevel} #{@name}" else @name
+
+  @multipliers =
+    str: 1
+    dex: 1
+    con: 3.5
+    int: 1.5
+    wis: 1
+    agi: 1
+
+    ice: 0.3
+    fire: 0.3
+    water: 0.3
+    earth: 0.3
+    thunder: 0.3
+
+    gold: 2
+    xp: 3
+
+    hp: 4
+    mp: 2
+
+    luck: 4.5
+
+    strPercent: 6
+    dexPercent: 6
+    conPercent: 15
+    intPercent: 10
+    wisPercent: 6
+    agiPercent: 6
+    icePercent: 2
+    firePercent: 2
+    waterPercent: 2
+    earthPercent: 2
+    thunderPercent: 2
+
+    goldPercent: 10
+    xpPercent: 13
+
+    hpPercent: 20
+    mpPercent: 13
+
+    enchantLevel: -25
+
+    luckPercent: 20
+
+    crit: 20
+    dodge: 20
+    prone: 20
+    power: 20
+    silver: 20
+    deadeye: 20
+    defense: 20
+    glowing: 20
+
+  @defaults =
+    itemClass: "basic"
+    str: 0
+    dex: 0
+    int: 0
+    con: 0
+    wis: 0
+    agi: 0
+    luck: 0
+    sentimentality: 0
+    piety: 0
+    ice: 0
+    fire: 0
+    water: 0
+    earth: 0
+    thunder: 0
+    xp: 0
+    gold: 0
+
+    strPercent: 0
+    dexPercent: 0
+    intPercent: 0
+    conPercent: 0
+    wisPercent: 0
+    agiPercent: 0
+    luckPercent: 0
+    sentimentalityPercent: 0
+    pietyPercent: 0
+    icePercent: 0
+    firePercent: 0
+    waterPercent: 0
+    earthPercent: 0
+    thunderPercent: 0
+    xpPercent: 0
+    goldPercent: 0
+
+    enchantLevel: 0
 
 module.exports = exports = Equipment

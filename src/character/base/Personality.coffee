@@ -1,36 +1,36 @@
 
 requireDir = require "require-dir"
 personalities = requireDir "../personalities"
+MessageCreator = require "../../system/MessageCreator"
 
 class Personality
 
-  constructor: ->
+  constructor: (player) ->
 
-  calculateYesPercentBonus: -> 0
+  unbind: (player) ->
 
-  calculateItemScoreBonus: (item) -> 0
+  broadcastMessage: (player, message) ->
+    player.playerManager.game.broadcast MessageCreator.genericMessage message
 
-  partyLeaveProbabilityBonus: -> 0
+Personality::isPhysical = (test) ->
+  test in ['Fighter', 'Generalist', 'Barbarian', 'Rogue', 'Jester']
 
-  itemReplacementRangeBonus: (item) -> Math.floor item.score()*0.25
+Personality::isMagical = (test) ->
+  test in ['Mage', 'Cleric', 'Bard']
 
-  calculateAdditionalGoldGainedFromItem: (item) -> 0
+Personality::isMedic = (test) ->
+  test in ['Cleric']
 
-  calculateBonusStepsToTakeThisTurn: -> 0
+Personality::allPersonalities = -> personalities
 
-  calculateDamageTakenFromAttack: (attack) -> 0
-
-  ###
-  https://docs.google.com/document/d/1t6PaUgnWODi9SujRd_sewnVVWvVm6zLAssIYIivui4s/edit
-
-  each class should bestow a personality trait on the user while in that class
-  mage - passive +mp, etc
-  ###
+Personality::getPersonality = (personality) ->
+  personalities[personality]
 
 Personality::doesPersonalityExist = (personality) ->
   personality of personalities
 
-Personality::createPersonality = (personality) ->
-  new personalities[personality]
+Personality::createPersonality = (personality, forWho) ->
+  new require("../personalities/ConsolationPrize")(forWho)
+  new personalities[personality] forWho
 
 module.exports = exports = Personality

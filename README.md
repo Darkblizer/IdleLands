@@ -7,57 +7,14 @@ It can be run with a backend of IRC, or a console, or really just about anything
 
 Developing
 ==========
+Whether you want to create events, or create the next best class, all of the information is housed in the [wiki](https://github.com/seiyria/IdleLands/wiki/New-Developer-Guide)!
 
-Want to help develop Idle Lands? Great! Testing is super easy, as you can do it right in your console (or, go the more painful route and test it in IRC)!
+If you're more interested in content development (events, monsters, items, etc) click [here](https://github.com/seiyria/IdleLands/wiki/New-Developer-Guide#content-development).
 
-Here are the prerequisites:
+If you're more interested in code development (backend, spells, classes, personalities, etc) click [here](https://github.com/seiyria/IdleLands/wiki/New-Developer-Guide#code-development).
 
-* coffee-script (npm install -g coffee-script)
-* grunt (npm install -g grunt-cli)
-* MongoDB
-
-Then do:
-
-```
-git clone https://github.com/seiyria/IdleLands.git
-npm install
-npm start
-```
-
-##Important##
-While writing code, make sure it passes `coffeelint` -- the easy shortcut for this is `grunt dev`.
+IRC
+===
+Feel free to join us in ##idlebot (on any server listed [here](https://github.com/seiyria/IdleLands/wiki/IRC-Info)) and chat with the devs and designers!
 
 
-Adding Content
-==============
-
-Want to add content such as Classes, Personalities, Spells, or anything like that? Check out the [wiki](https://github.com/seiyria/IdleLands/wiki) for all of the existing documentation on events and functions available.
-
-#Debugging#
-
-While running LocalTest.coffee, you may press [ENTER] to enter an interactive session. This will pause the execution and allow you to execute code. By calling *getWrapper()*, you will be able to access the IdleGameWrapper object.
-
-###Examples###
-####Change a player's gold####
-```
- %pm%=getWrapper().api.gameInstance.playerManager
- %pm%.players[0].gold = 100
-```
-####Generate a party name####
-```
-getWrapper().api.gameInstance.playerManager.players[0].party.pickPartyName()
-> Many Brave Peasants
-%lc%  (Special variable, returns the last command you entered)
-> Omnipotent Fear Near Darkness
-```
-
-####Force a battle to start####
-```
-%gi%=getWrapper().api.gameInstance
-%pm%=%gi%.playerManager
-%gi%.createParty(%pm%.players[0])
-%gi%.createParty(%pm%.players[1])
-%gi%.startBattle(%gi%.parties[0],%gi%.parties[1])
-c
-> A battle is raging...
-```

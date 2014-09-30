@@ -2,25 +2,32 @@
 _ = require "underscore"
 _.str = require "underscore.string"
 MessageCreator = require "../system/MessageCreator"
+chance = new (require "chance")()
 
 class Party
-  constructor: (@game, @players) ->
-    @players = [@players] if not _.isArray @players
+  constructor: (@game, players) ->
+    players = [players] if not _.isArray players
+    @players = []
+    if (not players) or players.length < 1
+      @disband()
+      return
+    @recruit players
     @name = @pickPartyName()
-    return if not @name or not @players
     @addGlobally()
-    @recruit(@players)
 
   score: ->
-    _.reduce @players, ((prev, player) -> prev + player.calc.partyScore()), 0
+    _.reduce @players, ((prev, player) -> prev + player.calc.totalItemScore()), 0
 
   getPartyName: ->
     if @players.length > 1 then @name else @players[0].name
 
+  genNullPartyName: ->
+    "The Null Party #{chance.integer min: 1, max: 1000}"
+
   pickPartyName: ->
-    return "The Null Party" if not Party::partyGrammar?
+    return @genNullPartyName() if not Party::partyGrammar?
     format = _.sample Party::partyGrammar
-    return "The Null Party" if not format?
+    return @genNullPartyName() if not format?
     arr =  format.split(" ")
     _.str.clean (_.reduce arr, (sentence, word) ->
       repl = null
@@ -47,28 +54,34 @@ class Party
 
     @game.parties.push @
 
-  recruit: (players)->
+  addPlayer: (player) ->
+    @recruit [player]
+
+  recruit: (players) ->
     _.forEach players, (player) =>
-      player.emit "party.join"
+      return if player of @players
+      player.emit "player.party.join"
       player.party = @
       player.partyName = if @players.length > 1 then @name else ''
+      @players.push player
 
-  playerLeave: (player) ->
+  playerLeave: (player, forced = no) ->
     @players = _.without @players, player
-    player.emit "party.leave"
+    player.emit "player.party.leave", player, @
     player.partyName = ''
-    if @players.length <= 1
-      @disband()
-      player.playerManager.game.broadcast MessageCreator.genericMessage "#{player.name} has disbanded #{@name}."
-    else
-      player.playerManager.game.broadcast MessageCreator.genericMessage "#{player.name} has left #{@name}."
 
-    delete player.party
+    # forced = yes means disband() called this
+    if not forced
+      if @players.length <= 1
+        @disband()
+        player.playerManager.game.broadcast MessageCreator.genericMessage "<player.name>#{player.name}</player.name> has disbanded <event.partyName>#{@name}</event.partyName>." if not forced
+      else
+        player.playerManager.game.broadcast MessageCreator.genericMessage "<player.name>#{player.name}</player.name> has left <event.partyName>#{@name}</event.partyName>."
+
+    player.party = null
 
   disband: ->
     @game.parties = _.without @game.parties, @
-    _.forEach @players, (player) ->
-      player.emit "party.leave"
-      delete player.party
+    _.forEach @players, (player) => @playerLeave player, yes
 
 module.exports = exports = Party
